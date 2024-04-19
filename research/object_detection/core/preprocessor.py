@@ -2908,6 +2908,141 @@ def random_patch_gaussian(image,
                     lambda: image)
   return image
 
+def random_patch_gaussian_blur(image,
+                               min_patch_size=1,
+                               max_patch_size=250,
+                               min_gaussian_kernel=2,
+                               max_gaussian_kernel=10,
+                               min_gaussian_stddev=0.0,
+                               max_gaussian_stddev=1.0,
+                               random_coef=0.0,
+                               seed=None,
+                               preprocess_vars_cache=None):
+  """Randomly applies gaussian blur noise to a random patch on the image.
+
+  The gaussian blur noise is applied to the image with values scaled to the range
+  [0.0, 1.0]. The result of applying gaussian blur noise to the scaled image is
+  clipped to be within the range [0.0, 1.0], equivalent to the range
+  [0.0, 255.0] after rescaling the image back.
+
+  See "Improving Robustness Without Sacrificing Accuracy with Patch Gaussian
+  Augmentation " by Lopes et al., 2019, for further details.
+  https://arxiv.org/abs/1906.02611
+
+  Args:
+    image: Rank 3 float32 tensor with shape [height, width, channels] and
+      values in the range [0.0, 255.0].
+    min_patch_size: Integer. An inclusive lower bound for the patch size.
+    max_patch_size:  Integer. An exclusive upper bound for the patch size.
+    min_gaussian_stddev: Integer. An inclusive lower bound for the kernel size.
+    max_gaussian_stddev:  Integer. An exclusive upper bound for the kernel size.
+    min_gaussian_stddev: Float. An inclusive lower bound for the standard
+      deviation of the gaussian noise.
+    max_gaussian_stddev: Float. An exclusive upper bound for the standard
+      deviation of the gaussian noise.
+    random_coef: Float. Random coefficient that defines the chance of getting
+      the original image. If random_coef is 0.0, we will always apply
+      downscaling, and if it is 1.0, we will always get the original image.
+    seed: (optional) Integer. Random seed.
+    preprocess_vars_cache: (optional) PreprocessorCache object that records
+      previously performed augmentations. Updated in-place. If this function is
+      called multiple times with the same non-null cache, it will perform
+      deterministically.
+
+  Returns:
+    Rank 3 float32 tensor with same shape as the input image and with gaussian
+    noise applied within a random patch.
+
+  Raises:
+    ValueError: If min_patch_size is < 1.
+  """
+  if min_patch_size < 1:
+     raise ValueError('Minimum patch size must be >= 1.')
+
+  get_or_create_rand_vars_fn = functools.partial(
+      _get_or_create_preprocess_rand_vars,
+      function_id=preprocessor_cache.PreprocessorCache.PATCH_GAUSSIAN_BLUR,
+      preprocess_vars_cache=preprocess_vars_cache)
+
+  def _apply_patch_gaussian_blur(image):
+    """Applies a patch gaussian with random size, location, and stddev."""
+    patch_size = get_or_create_rand_vars_fn(
+        functools.partial(
+            tf.random_uniform, [],
+            minval=min_patch_size,
+            maxval=max_patch_size,
+            dtype=tf.int32,
+            seed=seed),
+        key='patch_size')
+    gaussian_kernel = get_or_create_rand_vars_fn(
+        functools.partial(
+            tf.random_uniform, [],
+            minval=min_gaussian_kernel,
+            maxval=max_gaussian_kernel,
+            dtype=tf.float32,
+            seed=seed),
+        key='gaussian_kernel')
+    gaussian_stddev = get_or_create_rand_vars_fn(
+        functools.partial(
+            tf.random_uniform, [],
+            minval=min_gaussian_stddev,
+            maxval=max_gaussian_stddev,
+            dtype=tf.float32,
+            seed=seed),
+        key='gaussian_stddev')
+    image_shape = tf.shape(image)
+    y = get_or_create_rand_vars_fn(
+        functools.partial(
+            tf.random_uniform, [],
+            minval=0,
+            maxval=image_shape[0],
+            dtype=tf.int32,
+            seed=seed),
+        key='y')
+    x = get_or_create_rand_vars_fn(
+        functools.partial(
+            tf.random_uniform, [],
+            minval=0,
+            maxval=image_shape[1],
+            dtype=tf.int32,
+            seed=seed),
+        key='x')
+    
+    def gaussian_blur(img, kernel_size, sigma):
+      def gauss_kernel(channels, kernel_size, sigma):
+        ax = tf.range(-kernel_size // 2 + 1.0, kernel_size // 2 + 1.0)
+        xx, yy = tf.meshgrid(ax, ax)
+        kernel = tf.exp(-(xx ** 2 + yy ** 2) / (2.0 * sigma ** 2))
+        kernel = kernel / tf.reduce_sum(kernel)
+        kernel = tf.tile(kernel[..., tf.newaxis], [1, 1, channels])
+        return kernel
+
+      gaussian_kernel = gauss_kernel(image_shape[-1], kernel_size, sigma)
+      gaussian_kernel = gaussian_kernel[..., tf.newaxis]
+
+      return tf.nn.depthwise_conv2d(img, gaussian_kernel, [1, 1, 1, 1],
+                                    padding='SAME', data_format='NHWC')
+    
+    scaled_image = image / 255.0
+    image_tensor = tf.expand_dims(scaled_image, axis=0)
+    image_blurry = tf.squeeze(gaussian_blur(image_tensor, kernel_size=gaussian_kernel,
+                                            sigma=gaussian_stddev), axis=0)
+    patch_mask = patch_ops.get_patch_mask(y, x, patch_size, image_shape)
+    patch_mask = tf.expand_dims(patch_mask, -1)
+    patch_mask = tf.tile(patch_mask, [1, 1, image_shape[2]])
+    patched_image = tf.where(patch_mask, image_blurry, scaled_image)
+
+    return patched_image * 255.0
+  
+  with tf.name_scope('RandomPatchGaussianBlur', values=[image]):
+        image = tf.cast(image, tf.float32)
+        patch_gaussian_random = get_or_create_rand_vars_fn(
+            functools.partial(tf.random_uniform, [], seed=seed))
+        do_patch_gaussian = tf.greater_equal(patch_gaussian_random, random_coef)
+        image = tf.cond(do_patch_gaussian,
+                        lambda: _apply_patch_gaussian_blur(image),
+                        lambda: image)
+  return image
 
 def autoaugment_image(image, boxes, policy_name='v0'):
   """Apply an autoaugment policy to the image and boxes.
@@ -4572,6 +4707,7 @@ def get_default_func_arg_map(include_label_weights=True,
           groundtruth_instance_masks,
       ),
       random_patch_gaussian: (fields.InputDataFields.image,),
+      random_patch_gaussian_blur: (fields.InputDataFields.image,),
       autoaugment_image: (
           fields.InputDataFields.image,
           fields.InputDataFields.groundtruth_boxes,

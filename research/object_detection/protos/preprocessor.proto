@@ -47,6 +47,7 @@ message PreprocessingStep {
     RandomSquareCropByScale random_square_crop_by_scale = 37;
     RandomScaleCropAndPadToSquare random_scale_crop_and_pad_to_square = 38;
     AdjustGamma adjust_gamma = 39;
+    RandomPatchGaussianBlur random_patch_gaussian_blur = 40;
   }
 }
 
@@ -633,3 +634,22 @@ message AdjustGamma {
   optional float gain = 2 [default = 1.0];
 }
 
+message RandomPatchGaussianBlur {
+  // Probability of keeping the original image.
+  optional float random_coef = 1 [default = 0.0];
+
+  // The patch size will be chosen to be in the range
+  // [min_patch_size, max_patch_size).
+  optional int32 min_patch_size = 2 [default = 1];
+  optional int32 max_patch_size = 3 [default = 250];
+  
+  // The standard deviation of the gaussian noise applied within the patch will
+  // be chosen to be in the range [min_gaussian_kernel, max_gaussian_kernel).
+  optional float min_gaussian_kernel = 4 [default = 2];
+  optional float max_gaussian_kernel = 5 [default = 10];
+
+  // The standard deviation of the gaussian noise applied within the patch will
+  // be chosen to be in the range [min_gaussian_stddev, max_gaussian_stddev).
+  optional float min_gaussian_stddev = 6 [default = 0.0];
+  optional float max_gaussian_stddev = 7 [default = 1.0];
+}

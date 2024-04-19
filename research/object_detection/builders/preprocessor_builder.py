@@ -109,6 +109,8 @@ PREPROCESSING_FUNCTION_MAP = {
         preprocessor.convert_class_logits_to_softmax,
     'adjust_gamma':
         preprocessor.adjust_gamma,
+    'random_patch_gaussian_blur':
+        preprocessor.random_patch_gaussian_blur,
 }
 
 
