@@ -2991,19 +2991,19 @@ def random_patch_gaussian_blur(image,
             seed=seed),
         key='gaussian_stddev')
     image_shape = tf.shape(image)
-    y = get_or_create_rand_vars_fn(
-        functools.partial(
-            tf.random_uniform, [],
-            minval=0,
-            maxval=image_shape[0],
-            dtype=tf.int32,
-            seed=seed),
-        key='y')
+    # y = get_or_create_rand_vars_fn(
+    #     functools.partial(
+    #         tf.random_uniform, [],
+    #         minval=0,
+    #         maxval=image_shape[0],
+    #         dtype=tf.int32,
+    #         seed=seed),
+    #     key='y')
     x = get_or_create_rand_vars_fn(
         functools.partial(
             tf.random_uniform, [],
             minval=0,
-            maxval=image_shape[1],
+            maxval=image_shape[1] // 2,
             dtype=tf.int32,
             seed=seed),
         key='x')
@@ -3014,7 +3014,14 @@ def random_patch_gaussian_blur(image,
         xx, yy = tf.meshgrid(ax, ax)
         kernel = tf.exp(-(xx ** 2 + yy ** 2) / (2.0 * sigma ** 2))
         kernel = kernel / tf.reduce_sum(kernel)
-        kernel = tf.tile(kernel[..., tf.newaxis], [1, 1, channels])
+        kernel = kernel[..., tf.newaxis]
+
+        color_patch_gaussian = get_or_create_rand_vars_fn(
+           functools.partial(tf.random_uniform, [], seed=seed))
+        do_color_patch_gaussian = tf.greater_equal(color_patch_gaussian, 0.5)
+        kernel = tf.cond(do_color_patch_gaussian,
+                        lambda: tf.tile(kernel, [1, 1, channels]),
+                        lambda: tf.concat([kernel, kernel, kernel*.95], axis=-1))
         return kernel
 
       gaussian_kernel = gauss_kernel(image_shape[-1], kernel_size, sigma)
@@ -3024,9 +3031,10 @@ def random_patch_gaussian_blur(image,
                                     padding='SAME', data_format='NHWC')
     
     scaled_image = image / 255.0
-    image_tensor = tf.expand_dims(scaled_image, axis=0)
-    image_blurry = tf.squeeze(gaussian_blur(image_tensor, kernel_size=gaussian_kernel,
-                                            sigma=gaussian_stddev), axis=0)
+    image_blurry = gaussian_blur(scaled_image[tf.newaxis, ...],
+                                 kernel_size=gaussian_kernel,
+                                 sigma=gaussian_stddev)[0]
+    y = image_shape[0] // 2
     patch_mask = patch_ops.get_patch_mask(y, x, patch_size, image_shape)
     patch_mask = tf.expand_dims(patch_mask, -1)
     patch_mask = tf.tile(patch_mask, [1, 1, image_shape[2]])
